@@ -220,6 +220,7 @@ enum llm_arch {
     LLM_ARCH_MAMBA,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
+    LLM_ARCH_RWKV5,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -252,6 +253,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MAMBA,           "mamba"      },
     { LLM_ARCH_XVERSE,          "xverse"     },
     { LLM_ARCH_COMMAND_R,       "command-r"  },
+    { LLM_ARCH_RWKV5,           "rwkv5"      },
     { LLM_ARCH_UNKNOWN,         "(unknown)"  },
 };
 
@@ -912,6 +914,12 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
+    {
+        LLM_ARCH_RWKV5,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
         },
     },
     {
@@ -3981,6 +3989,16 @@ static void llm_load_vocab(
             vocab.special_bos_id = 101;
             vocab.special_eos_id = 102;
             vocab.special_unk_id = 100;
+            vocab.special_sep_id = -1;
+            vocab.special_pad_id = -1;
+            vocab.add_space_prefix = false;
+        } else if (tokenizer_name == "rwkv") {
+            vocab.type = LLAMA_VOCAB_TYPE_RWKV;
+
+            // default special tokens
+            vocab.special_bos_id = 0;
+            vocab.special_eos_id = 0;
+            vocab.special_unk_id = -1;
             vocab.special_sep_id = -1;
             vocab.special_pad_id = -1;
             vocab.add_space_prefix = false;
@@ -11230,6 +11248,102 @@ struct llm_tokenizer_wpm {
     const llama_vocab & vocab;
 };
 
+// RWKV tokenizer
+
+static std::vector<uint8_t> unescape_rwkv_token(const std::string & escaped) {
+    std::vector<uint8_t> output;
+
+    // Parser state
+    bool escaping = false;
+    uint8_t hex_remaining = 0;
+    uint8_t hex_acc = 0;
+
+    // Step through characters, performing parsing
+    for (const char & c : escaped) {
+        // If we're parsing a hex code, interpret the next character
+        if (hex_remaining != 0) {
+            uint8_t value = (c >= 'a') ? (c - 'a' + 10) : (c - '0');
+            hex_acc = (hex_acc << 4) + value;
+
+            hex_remaining -= 1;
+            if (hex_remaining == 0) {
+                output.push_back(hex_acc);
+                hex_acc = 0;
+            }
+
+            continue;
+        }
+
+        // If we got an escape character, interpret it
+        if (escaping) {
+            if (c == 't') {
+                output.push_back('\t');
+            } else if (c == 'n') {
+                output.push_back('\n');
+            } else if (c == 'r') {
+                output.push_back('\r');
+            } else if (c == 'x') {
+                hex_remaining = 2;
+            } else {
+                output.push_back(c);
+            }
+
+            escaping = false;
+            continue;
+        }
+
+        if (c == '\\') {
+            escaping = true;
+            continue;
+        }
+
+        output.push_back(c);
+    }
+
+    return output;
+}
+
+struct llm_tokenizer_rwkv {
+    llm_tokenizer_rwkv(const llama_vocab & vocab): vocab(vocab) {
+        // RWKV supports arbitrary byte tokens, but the vocab struct only supports string tokens.
+        // For now, we decode the vocab here into the lookup we'll use for tokenization.
+        for (const auto & token : vocab.id_to_token) {
+            auto data = unescape_rwkv_token(token.text);
+            tokens.push_back(data);
+        }
+    }
+
+    void tokenize(const std::string & text, std::vector<llama_vocab::id> & output) {
+        uint32_t position = 0;
+
+        while (position < text.size()) {
+            // Iterate through possible tokens backwards, starting with the largest
+            for (int32_t i = (int32_t)tokens.size() - 1; i >= 0; i--) {
+                uint32_t token_size = tokens[i].size();
+
+                // If there's not enough left for this token
+                if (text.size() - position < token_size) {
+                    continue;
+                }
+
+                // If the token doesn't match the data
+                if (std::memcmp(text.data() + position, tokens[i].data(), token_size) != 0) {
+                    continue;
+                }
+
+                // Add the token and advance
+                output.push_back(i);
+                position += token_size;
+                break;
+            }
+        }
+    }
+
+    const llama_vocab & vocab;
+
+    std::vector<std::vector<uint8_t>> tokens;
+};
+
 typedef enum FRAGMENT_BUFFER_VARIANT_TYPE {
     FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN,
     FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT
@@ -11436,6 +11550,23 @@ static std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & 
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", raw_text.length(), fragment.offset, fragment.length, raw_text.c_str());
 #endif
                         llm_tokenizer_wpm tokenizer(vocab);
+                        tokenizer.tokenize(raw_text, output);
+                    } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
+                        output.push_back(fragment.token);
+                    }
+                }
+            } break;
+        case LLAMA_VOCAB_TYPE_RWKV:
+            {
+                for (const auto & fragment : fragment_buffer) {
+                    if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+                        auto raw_text = fragment.raw_text.substr(fragment.offset, fragment.length);
+
+#ifdef PRETOKENIZERDEBUG
+                        LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", raw_text.length(), fragment.offset, fragment.length, raw_text.c_str());
+#endif
+
+                        llm_tokenizer_rwkv tokenizer(vocab);
                         tokenizer.tokenize(raw_text, output);
                     } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
                         output.push_back(fragment.token);
@@ -14080,9 +14211,9 @@ struct llama_context * llama_new_context_with_model(
     ggml_type type_k = params.type_k;
     ggml_type type_v = params.type_v;
 
-    // Mamba only needs a constant number of KV cache cells per sequence
-    if (model->arch == LLM_ARCH_MAMBA) {
-        // Mamba needs at least as many KV cells as there are sequences kept at any time
+    // Mamba and RWKV only need a constant number of KV cache cells per sequence
+    if (model->arch == LLM_ARCH_MAMBA || model->arch == LLM_ARCH_RWKV5) {
+        // Mamba and RWKV need at least as many KV cells as there are sequences kept at any time
         kv_size = std::max((uint32_t) 1, params.n_seq_max);
         // it's probably best to keep as much precision as possible for the states
         type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
@@ -14348,6 +14479,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_REFACT:
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_RWKV5:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -15566,6 +15698,18 @@ int32_t llama_token_to_piece(const struct llama_model * model, llama_token token
                 ;
             }
             break;
+        }
+        case LLAMA_VOCAB_TYPE_RWKV: {
+            const llama_vocab::token_data & resolved = model->vocab.id_to_token[token];
+            std::vector<uint8_t> result = unescape_rwkv_token(resolved.text);
+
+            // If we don't have enough space, return an error
+            if (result.size() > (size_t)length) {
+                return -(int)result.size();
+            }
+
+            memcpy(buf, result.data(), result.size());
+            return (int)result.size();
         }
         default:
             GGML_ASSERT(false);

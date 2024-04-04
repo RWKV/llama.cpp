@@ -63,6 +63,7 @@ extern "C" {
         LLAMA_VOCAB_TYPE_SPM  = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
         LLAMA_VOCAB_TYPE_BPE  = 2, // GPT-2 tokenizer based on byte-level BPE
         LLAMA_VOCAB_TYPE_WPM  = 3, // BERT tokenizer based on WordPiece
+        LLAMA_VOCAB_TYPE_RWKV = 4, // RWKV tokenizer based on greedy tokenization
     };
 
     // note: these values should be synchronized with ggml_rope
