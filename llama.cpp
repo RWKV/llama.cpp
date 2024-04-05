@@ -428,9 +428,12 @@ enum llm_tensor {
     LLM_TENSOR_FFN_DOWN,
     LLM_TENSOR_FFN_UP,
     LLM_TENSOR_FFN_ACT,
-    LLM_TENSOR_FFN_DOWN_EXP,
+    LLM_TENSOR_FFN_DOWN_EXP,  // split experts for backward compatibility
     LLM_TENSOR_FFN_GATE_EXP,
     LLM_TENSOR_FFN_UP_EXP,
+    LLM_TENSOR_FFN_DOWN_EXPS, // merged experts
+    LLM_TENSOR_FFN_GATE_EXPS,
+    LLM_TENSOR_FFN_UP_EXPS,
     LLM_TENSOR_ATTN_Q_NORM,
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
@@ -465,6 +468,9 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_EXP,    "blk.%d.ffn_gate.%d" },
             { LLM_TENSOR_FFN_DOWN_EXP,    "blk.%d.ffn_down.%d" },
             { LLM_TENSOR_FFN_UP_EXP,      "blk.%d.ffn_up.%d" },
+            { LLM_TENSOR_FFN_GATE_EXPS,   "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,   "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,     "blk.%d.ffn_up_exps" },
         },
     },
     {
@@ -518,6 +524,9 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_EXP,    "blk.%d.ffn_gate.%d" },
             { LLM_TENSOR_FFN_DOWN_EXP,    "blk.%d.ffn_down.%d" },
             { LLM_TENSOR_FFN_UP_EXP,      "blk.%d.ffn_up.%d" },
+            { LLM_TENSOR_FFN_GATE_EXPS,   "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,   "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,     "blk.%d.ffn_up_exps" },
             { LLM_TENSOR_LAYER_OUT_NORM,  "blk.%d.layer_output_norm" },
             { LLM_TENSOR_ATTN_OUT_NORM,   "blk.%d.attn_output_norm" },
         },
@@ -587,6 +596,9 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
             { LLM_TENSOR_FFN_ACT,         "blk.%d.ffn.act" },
+            { LLM_TENSOR_POS_EMBD,        "position_embd" },
+            { LLM_TENSOR_ATTN_Q_NORM,     "blk.%d.attn_q_norm"},
+            { LLM_TENSOR_ATTN_K_NORM,     "blk.%d.attn_k_norm"},
         },
     },
     {
@@ -1872,9 +1884,9 @@ struct llama_layer {
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp;
-    struct ggml_tensor * ffn_gate_exp[LLAMA_MAX_EXPERTS];
-    struct ggml_tensor * ffn_down_exp[LLAMA_MAX_EXPERTS];
-    struct ggml_tensor * ffn_up_exp  [LLAMA_MAX_EXPERTS];
+    struct ggml_tensor * ffn_gate_exps;
+    struct ggml_tensor * ffn_down_exps;
+    struct ggml_tensor * ffn_up_exps ;
 
     // ff bias
     struct ggml_tensor * ffn_down_b; // b2
@@ -2876,19 +2888,19 @@ struct llama_model_loader {
 
     llama_mmaps mappings;
 
-    // Holds information on a model weights
-    struct llama_tensor_weights {
+    // Holds information on a model weight
+    struct llama_tensor_weight {
         uint16_t  idx; // source file index
         size_t   offs; // tensor data offset in the original file
 
         ggml_tensor * tensor;
 
-        llama_tensor_weights(uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
+        llama_tensor_weight(uint16_t idx, const char * name, const struct gguf_context * gguf_ctx, ggml_tensor * tensor) : idx(idx), tensor(tensor) {
             const int tensor_idx = gguf_find_tensor(gguf_ctx, name);
             offs = gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, tensor_idx);
         }
     };
-    std::vector<llama_tensor_weights> weights;
+    std::vector<llama_tensor_weight> weights;
 
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
 
@@ -2928,7 +2940,7 @@ struct llama_model_loader {
         // For subsidiary files, `meta` tensor data offset must not be used,
         // so we build a unified tensors index for weights.
         for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-            weights.emplace_back(llama_tensor_weights(0, cur->name, meta, cur));
+            weights.emplace_back(0, cur->name, meta, cur);
         }
         files.emplace_back(new llama_file(fname.c_str(), "rb"));
         contexts.emplace_back(ctx);
@@ -2968,7 +2980,7 @@ struct llama_model_loader {
 
                 // Save tensors data offset info of the shard.
                 for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-                    weights.emplace_back(llama_tensor_weights(idx, cur->name, ctx_gguf, cur));
+                    weights.emplace_back(idx, cur->name, ctx_gguf, cur);
                 }
                 files.emplace_back(new llama_file(split_path, "rb"));
                 contexts.emplace_back(ctx);
@@ -3172,21 +3184,37 @@ struct llama_model_loader {
         return weights.at(i).tensor->name;
     }
 
-    const llama_tensor_weights & get_weights(const char * name) const {
+    const llama_tensor_weight * get_weight(const char * name) const {
         for (const auto & weight : weights) {
             if (strcmp(name, weight.tensor->name) == 0) {
-                return weight;
+                return &weight;
             }
         }
-        throw std::runtime_error(format("tensor %s not found", name));
+        return nullptr;
+    }
+
+    const llama_tensor_weight & require_weight(const char * name) const {
+        const llama_tensor_weight * weight = get_weight(name);
+        if (!weight) {
+            throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name));
+        }
+        return *weight;
     }
 
     struct ggml_tensor * get_tensor_meta(const char * name) const {
-        try {
-            return get_weights(name).tensor;
-        } catch (const std::runtime_error & e) {
-            return NULL;
+        const auto * weight = get_weight(name);
+        if (!weight) {
+            return nullptr;
         }
+        return weight->tensor;
+    }
+
+    struct ggml_tensor * require_tensor_meta(const char * name) const {
+        struct ggml_tensor * tensor = get_tensor_meta(name);
+        if (!tensor) {
+            throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name));
+        }
+        return tensor;
     }
 
     struct ggml_tensor * get_tensor_meta(int i) const {
@@ -3202,7 +3230,7 @@ struct llama_model_loader {
         return tensor;
     }
 
-    struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, bool required = true) {
+    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const {
         const struct ggml_tensor * cur = get_tensor_meta(name.c_str());
 
         if (cur == NULL) {
@@ -3214,8 +3242,8 @@ struct llama_model_loader {
 
         {
             bool is_ok = true;
-            for (size_t i = 0; i < ne.size(); ++i) {
-                if (ne[i] != cur->ne[i]) {
+            for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
+                if ((i < ne.size() && ne[i] != cur->ne[i]) || (i >= ne.size() && cur->ne[i] != 1)) {
                     is_ok = false;
                     break;
                 }
@@ -3229,7 +3257,45 @@ struct llama_model_loader {
             }
         }
 
+        return cur;
+    }
+
+    struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, bool required = true) {
+        const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
+
+        if (cur == NULL) {
+            return NULL;
+        }
+
         return create_tensor_for(ctx, cur);
+    }
+
+    struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::vector<int64_t> & ne, size_t offset, bool required = true) {
+        const struct ggml_tensor * cur = check_tensor_dims(name, ne, required);
+
+        if (cur == NULL) {
+            return NULL;
+        }
+
+        if (cur->type != base->type) {
+            throw std::runtime_error(format("%s: tensor '%s' has wrong type; expected %s, got %s", __func__, name.c_str(), ggml_type_name(base->type), ggml_type_name(cur->type)));
+        }
+
+        std::array<int64_t, GGML_MAX_DIMS> dims;
+        for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
+            dims[i] = i < ne.size() ? ne[i] : 1;
+        }
+
+        struct ggml_tensor * tensor = ggml_view_4d(ctx, base,
+                                        dims[0], dims[1], dims[2], dims[3],
+                                        cur->nb[1], cur->nb[2], cur->nb[3],
+                                        offset);
+
+        ggml_set_name(tensor, name.c_str());
+
+        n_created++;
+
+        return tensor;
     }
 
     void done_getting_tensors() const {
@@ -3244,7 +3310,7 @@ struct llama_model_loader {
             mmaps_used.reserve(files.size());
             for (const auto & file : files) {
                 std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa()));
-                mmaps_used.emplace_back(std::make_pair(mapping->size, 0));
+                mmaps_used.emplace_back(mapping->size, 0);
                 if (mlock_mmaps) {
                     std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
                     mlock_mmap->init(mapping->addr);
@@ -3268,18 +3334,25 @@ struct llama_model_loader {
         *last  = 0;
         *addr = mapping->addr;
         for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
-            const auto & w = get_weights(ggml_get_name(tensor));
-            if (w.idx != idx) {
-                continue;
+            try {
+                const auto * weight = get_weight(ggml_get_name(tensor));
+                if (!weight) {
+                    continue;
+                }
+                if (weight->idx != idx) {
+                    continue;
+                }
+                *first = std::min(*first, weight->offs);
+                *last  = std::max(*last,  weight->offs + ggml_nbytes(tensor));
+            } catch(...) {
+                // the tensor is not in the model
             }
-            *first = std::min(*first, w.offs);
-            *last  = std::max(*last,  w.offs + ggml_nbytes(tensor));
         }
     }
 
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const {
-        const auto & w = get_weights(ggml_get_name(cur));
+        const auto & w = require_weight(ggml_get_name(cur));
 
         if (use_mmap) {
             const auto & mapping = mappings.at(w.idx);
@@ -3312,44 +3385,49 @@ struct llama_model_loader {
 
         std::vector<no_init<uint8_t>> read_buf;
         for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
+            const auto * weight = get_weight(ggml_get_name(cur));
+            if (weight == nullptr) {
+                // this can happen with split experts models
+                continue;
+            }
+
             if (progress_callback) {
                 if (!progress_callback((float) size_done / size_data, progress_callback_user_data)) {
                     return false;
                 }
             }
 
-            const auto & w = get_weights(ggml_get_name(cur));
             size_t n_size = ggml_nbytes(cur);
 
             if (use_mmap) {
-                const auto & mapping = mappings.at(w.idx);
+                const auto & mapping = mappings.at(weight->idx);
                 ggml_backend_buffer_t buf_mmap = nullptr;
-                if (bufs_mmap.count(w.idx)) {
-                    buf_mmap = bufs_mmap.at(w.idx);
+                if (bufs_mmap.count(weight->idx)) {
+                    buf_mmap = bufs_mmap.at(weight->idx);
                 }
                 GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
                 if (buf_mmap && cur->data == nullptr) {
-                    ggml_backend_tensor_alloc(buf_mmap, cur, (uint8_t *) mapping->addr + w.offs);
+                    ggml_backend_tensor_alloc(buf_mmap, cur, (uint8_t *) mapping->addr + weight->offs);
                     if (lmlocks) {
-                        const auto & lmlock = lmlocks->at(w.idx);
-                        lmlock->grow_to(w.offs + ggml_nbytes(cur));
+                        const auto & lmlock = lmlocks->at(weight->idx);
+                        lmlock->grow_to(weight->offs + ggml_nbytes(cur));
                     }
 
-                    auto & mmap_used = mmaps_used[w.idx];
-                    mmap_used.first  = std::min(mmap_used.first,  w.offs);
-                    mmap_used.second = std::max(mmap_used.second, w.offs + n_size);
+                    auto & mmap_used = mmaps_used[weight->idx];
+                    mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                    mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
                 } else {
-                    ggml_backend_tensor_set(cur, (uint8_t *) mapping->addr + w.offs, 0, n_size);
+                    ggml_backend_tensor_set(cur, (uint8_t *) mapping->addr + weight->offs, 0, n_size);
                 }
             } else {
-                GGML_ASSERT(w.idx < files.size());
-                const auto & file = files.at(w.idx);
+                GGML_ASSERT(weight->idx < files.size());
+                const auto & file = files.at(weight->idx);
                 if (ggml_backend_buffer_is_host(cur->buffer)) {
-                    file->seek(w.offs, SEEK_SET);
+                    file->seek(weight->offs, SEEK_SET);
                     file->read_raw(cur->data, ggml_nbytes(cur));
                 } else {
                     read_buf.resize(ggml_nbytes(cur));
-                    file->seek(w.offs, SEEK_SET);
+                    file->seek(weight->offs, SEEK_SET);
                     file->read_raw(read_buf.data(), ggml_nbytes(cur));
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                 }
@@ -4298,6 +4376,7 @@ static bool llm_load_tensors(
 
     const int64_t n_layer     = hparams.n_layer;
     const int64_t i_gpu_start = std::max((int64_t) hparams.n_layer - n_gpu_layers, (int64_t) 0);
+    bool use_mmap_buffer = true;
 
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
     model.buft_input = llama_default_buffer_type_cpu(true);
@@ -4386,6 +4465,10 @@ static bool llm_load_tensors(
 
     // create one context per buffer type
     size_t ctx_size = ggml_tensor_overhead()*(ml.n_tensors + 1); // +1 for models where tok_embd is duplicated as output
+
+    // for moe merged tensors
+    ctx_size += ggml_tensor_overhead()*hparams.n_expert*n_layer;
+
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     for (auto & it : buft_layer_count) {
         struct ggml_init_params params = {
@@ -4412,6 +4495,11 @@ static bool llm_load_tensors(
         const int64_t n_vocab      = hparams.n_vocab;
         const int64_t n_vocab_type = hparams.n_vocab_type;
         const int64_t n_ff         = hparams.n_ff;
+        const int64_t n_expert     = hparams.n_expert;
+
+        if (n_expert > 0 && hparams.n_expert_used == 0) {
+            throw std::runtime_error("model has expert layers but no expert layers are used");
+        }
 
         GGML_ASSERT(n_embd_gqa == n_embd_k_gqa);
 
@@ -4466,30 +4554,50 @@ static bool llm_load_tensors(
 
                         layer.ffn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-                        layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd}, false);
-
-                        if (layer.ffn_gate_inp == nullptr) {
-                            GGML_ASSERT(hparams.n_expert      == 0);
-                            GGML_ASSERT(hparams.n_expert_used == 0);
-
+                        if (n_expert == 0) {
                             layer.ffn_gate = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
                             layer.ffn_down = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
                             layer.ffn_up   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
                         } else {
-                            GGML_ASSERT(hparams.n_expert      > 0);
-                            GGML_ASSERT(hparams.n_expert_used > 0);
+                            layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-                            // MoE branch
-                            for (uint32_t x = 0; x < hparams.n_expert; ++x) {
-                                layer.ffn_gate_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), {n_embd,   n_ff});
-                                layer.ffn_down_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), {  n_ff, n_embd});
-                                layer.ffn_up_exp[x]   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), {n_embd,   n_ff});
+                            layer.ffn_gate_exps = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, false);
+                            if (layer.ffn_gate_exps) {
+                                layer.ffn_down_exps = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert});
+                                layer.ffn_up_exps   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert});
+                            } else {
+                                // merge split expert into a single tensor for compatibility with older models
+                                // requires disabling mmap
+                                use_mmap_buffer = false;
+
+                                ggml_type type_gate = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, 0).c_str())->type;
+                                ggml_type type_down = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, 0).c_str())->type;
+                                ggml_type type_up   = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, 0).c_str())->type;
+
+                                layer.ffn_gate_exps = ggml_new_tensor_3d(ctx_split, type_gate, n_embd,   n_ff, n_expert);
+                                layer.ffn_down_exps = ggml_new_tensor_3d(ctx_split, type_down,   n_ff, n_embd, n_expert);
+                                layer.ffn_up_exps   = ggml_new_tensor_3d(ctx_split, type_up,   n_embd,   n_ff, n_expert);
+
+                                ggml_set_name(layer.ffn_gate_exps, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i).c_str());
+                                ggml_set_name(layer.ffn_down_exps, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i).c_str());
+                                ggml_set_name(layer.ffn_up_exps,   tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i).c_str());
+
+                                for (uint32_t x = 0; x < n_expert; ++x) {
+                                    // the individual experts are loaded into a view of the merged tensor
+                                    ml.create_tensor_as_view(ctx_split, layer.ffn_gate_exps, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), { n_embd, n_ff }, layer.ffn_gate_exps->nb[2]*x);
+                                    ml.create_tensor_as_view(ctx_split, layer.ffn_down_exps, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), { n_ff, n_embd }, layer.ffn_down_exps->nb[2]*x);
+                                    ml.create_tensor_as_view(ctx_split, layer.ffn_up_exps,   tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), { n_embd, n_ff }, layer.ffn_up_exps->nb[2]*x);
+                                }
                             }
                         }
                     }
                 } break;
             case LLM_ARCH_GROK:
                 {
+                    if (n_expert == 0) {
+                        throw std::runtime_error("Grok model cannot have zero experts");
+                    }
+
                     model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
                     // output
@@ -4521,16 +4629,35 @@ static bool llm_load_tensors(
 
                         layer.ffn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-                        layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd});
+                        layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-                        GGML_ASSERT(hparams.n_expert      > 0);
-                        GGML_ASSERT(hparams.n_expert_used > 0);
+                        layer.ffn_gate_exps = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff, n_expert}, false);
+                        if (layer.ffn_gate_exps) {
+                            layer.ffn_down_exps = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert});
+                            layer.ffn_up_exps   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert});
+                        } else {
+                            // merge split expert into a single tensor for compatibility with older models
+                            // requires disabling mmap
+                            use_mmap_buffer = false;
 
-                        // MoE branch
-                        for (uint32_t x = 0; x < hparams.n_expert; ++x) {
-                            layer.ffn_gate_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), {n_embd,   n_ff});
-                            layer.ffn_down_exp[x] = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), {  n_ff, n_embd});
-                            layer.ffn_up_exp[x]   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), {n_embd,   n_ff});
+                            ggml_type type_gate = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, 0).c_str())->type;
+                            ggml_type type_down = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, 0).c_str())->type;
+                            ggml_type type_up   = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, 0).c_str())->type;
+
+                            layer.ffn_gate_exps = ggml_new_tensor_3d(ctx_split, type_gate, n_embd,   n_ff, n_expert);
+                            layer.ffn_down_exps = ggml_new_tensor_3d(ctx_split, type_down,   n_ff, n_embd, n_expert);
+                            layer.ffn_up_exps   = ggml_new_tensor_3d(ctx_split, type_up,   n_embd,   n_ff, n_expert);
+
+                            ggml_set_name(layer.ffn_gate_exps, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i).c_str());
+                            ggml_set_name(layer.ffn_down_exps, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i).c_str());
+                            ggml_set_name(layer.ffn_up_exps,   tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i).c_str());
+
+                            for (uint32_t x = 0; x < n_expert; ++x) {
+                                // the individual experts are loaded into a view of the merged tensor
+                                ml.create_tensor_as_view(ctx_split, layer.ffn_gate_exps, tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, x), { n_embd, n_ff }, layer.ffn_gate_exps->nb[2]*x);
+                                ml.create_tensor_as_view(ctx_split, layer.ffn_down_exps, tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, x), { n_ff, n_embd }, layer.ffn_down_exps->nb[2]*x);
+                                ml.create_tensor_as_view(ctx_split, layer.ffn_up_exps,   tn(LLM_TENSOR_FFN_UP_EXP,   "weight", i, x), { n_embd, n_ff }, layer.ffn_up_exps->nb[2]*x);
+                            }
                         }
 
                         layer.layer_out_norm   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_LAYER_OUT_NORM, "weight", i), {n_embd});
@@ -4771,6 +4898,7 @@ static bool llm_load_tensors(
             case LLM_ARCH_MPT:
                 {
                     model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+                    model.pos_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, hparams.n_ctx_train}, false);
 
                     // output
                     {
@@ -4808,6 +4936,12 @@ static bool llm_load_tensors(
 
                         layer.ffn_up     = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
                         layer.ffn_up_b   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, false);
+
+                        layer.attn_q_norm   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd}, false);
+                        layer.attn_q_norm_b = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "bias",   i), {n_embd}, false);
+
+                        layer.attn_k_norm   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd}, false);
+                        layer.attn_k_norm_b = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "bias",   i), {n_embd}, false);
 
                         // AWQ ScaleActivation layer
                         layer.ffn_act = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_ACT, "scales", i), {n_ff}, false);
@@ -5336,7 +5470,7 @@ static bool llm_load_tensors(
         // only the mmap region containing the tensors in the model is mapped to the backend buffer
         // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
         // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
-        if (ml.use_mmap && buft == llama_default_buffer_type_cpu(true)) {
+        if (ml.use_mmap && use_mmap_buffer && buft == llama_default_buffer_type_cpu(true)) {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 void * addr = nullptr;
                 size_t first, last;
@@ -5360,7 +5494,7 @@ static bool llm_load_tensors(
             }
         }
 #ifdef GGML_USE_METAL
-        else if (ml.use_mmap && buft == ggml_backend_metal_buffer_type()) {
+        else if (ml.use_mmap && use_mmap_buffer && buft == ggml_backend_metal_buffer_type()) {
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 const size_t max_size = ggml_get_max_tensor_size(ctx);
                 void * addr = nullptr;
@@ -5443,8 +5577,10 @@ static bool llm_load_tensors(
         }
     }
 
-    for (auto & mapping : ml.mappings) {
-        model.mappings.emplace_back(std::move(mapping));
+    if (use_mmap_buffer) {
+        for (auto & mapping : ml.mappings) {
+            model.mappings.emplace_back(std::move(mapping));
+        }
     }
 
     // loading time will be recalculate after the first eval, so
@@ -6312,19 +6448,19 @@ struct llm_build_context {
                 for (int i = 0; i < n_expert_used; ++i) {
                     ggml_tensor * cur_expert;
 
-                    ggml_tensor * cur_up = ggml_mul_mat_id(ctx0, model.layers[il].ffn_up_exp, n_expert, selected_experts, i, cur);
+                    ggml_tensor * cur_up = ggml_mul_mat_id(ctx0, model.layers[il].ffn_up_exps, selected_experts, i, cur);
                     cb(cur_up, "ffn_moe_up", il);
 
-                    ggml_tensor * cur_gate = ggml_mul_mat_id(ctx0, model.layers[il].ffn_gate_exp, n_expert, selected_experts, i, cur);
+                    ggml_tensor * cur_gate = ggml_mul_mat_id(ctx0, model.layers[il].ffn_gate_exps, selected_experts, i, cur);
                     cb(cur_gate, "ffn_moe_gate", il);
 
                     cur_gate = ggml_silu(ctx0, cur_gate);
                     cb(cur_gate, "ffn_moe_silu", il);
 
-                    cur_expert = ggml_mul(ctx0, cur_up, cur_gate); // [n_tokens, n_embd]
+                    cur_expert = ggml_mul(ctx0, cur_up, cur_gate);
                     cb(cur_expert, "ffn_moe_gate_par", il);
 
-                    cur_expert = ggml_mul_mat_id(ctx0, model.layers[il].ffn_down_exp, n_expert, selected_experts, i, cur_expert); // [n_tokens, n_embd]
+                    cur_expert = ggml_mul_mat_id(ctx0, model.layers[il].ffn_down_exps, selected_experts, i, cur_expert); // [n_tokens, n_embd]
                     cb(cur_expert, "ffn_moe_down", il);
 
                     cur_expert = ggml_mul(ctx0, cur_expert,
@@ -6846,20 +6982,20 @@ struct llm_build_context {
             for (int i = 0; i < n_expert_used; ++i) {
                 ggml_tensor * cur_expert;
 
-                ggml_tensor * cur_up = ggml_mul_mat_id(ctx0, model.layers[il].ffn_up_exp, n_expert, selected_experts, i, cur);
+                ggml_tensor * cur_up = ggml_mul_mat_id(ctx0, model.layers[il].ffn_up_exps, selected_experts, i, cur);
                 cb(cur_up, "ffn_moe_up", il);
 
-                ggml_tensor * cur_gate = ggml_mul_mat_id(ctx0, model.layers[il].ffn_gate_exp, n_expert, selected_experts, i, cur);
+                ggml_tensor * cur_gate = ggml_mul_mat_id(ctx0, model.layers[il].ffn_gate_exps, selected_experts, i, cur);
                 cb(cur_gate, "ffn_moe_gate", il);
 
                 //GeLU
                 cur_gate = ggml_gelu(ctx0, cur_gate);
                 cb(cur_gate, "ffn_moe_gelu", il);
 
-                cur_expert = ggml_mul(ctx0, cur_up, cur_gate); // [n_tokens, n_embd]
+                cur_expert = ggml_mul(ctx0, cur_up, cur_gate);
                 cb(cur_expert, "ffn_moe_gate_par", il);
 
-                cur_expert = ggml_mul_mat_id(ctx0, model.layers[il].ffn_down_exp, n_expert, selected_experts, i, cur_expert); // [n_tokens, n_embd]
+                cur_expert = ggml_mul_mat_id(ctx0, model.layers[il].ffn_down_exps, selected_experts, i, cur_expert); // [n_tokens, n_embd]
                 cb(cur_expert, "ffn_moe_down", il);
 
                 cur_expert = ggml_mul(ctx0, cur_expert,
@@ -7623,6 +7759,7 @@ struct llm_build_context {
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
         struct ggml_tensor * cur;
+        struct ggml_tensor * pos;
         struct ggml_tensor * inpL;
 
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
@@ -7632,6 +7769,16 @@ struct llm_build_context {
 
         // positions of the tokens in the KV cache
         struct ggml_tensor * KQ_pos = build_inp_KQ_pos();
+
+        if (model.pos_embd) {
+            // inp_pos - contains the positions
+            struct ggml_tensor * inp_pos = build_inp_pos();
+            pos = ggml_get_rows(ctx0, model.pos_embd, inp_pos);
+            cb(pos, "pos_embd", -1);
+
+            inpL = ggml_add(ctx0, inpL, pos);
+            cb(inpL, "inpL", -1);
+        }
 
         for (int il = 0; il < n_layer; ++il) {
             struct ggml_tensor * attn_norm;
@@ -7667,11 +7814,32 @@ struct llm_build_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                // Q/K Layernorm
+                if (model.layers[il].attn_q_norm) {
+                    Qcur = llm_build_norm(ctx0, Qcur, hparams,
+                            model.layers[il].attn_q_norm,
+                            model.layers[il].attn_q_norm_b,
+                            LLM_NORM, cb, il);
+                    cb(Qcur, "Qcur", il);
 
-                cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
+                    Kcur = llm_build_norm(ctx0, Kcur, hparams,
+                            model.layers[il].attn_k_norm,
+                            model.layers[il].attn_k_norm_b,
+                            LLM_NORM, cb, il);
+                    cb(Kcur, "Kcur", il);
+
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+
+                    cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
-                        Kcur, Vcur, Qcur, KQ_mask, KQ_pos, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
+                        Kcur, Vcur, Qcur, KQ_mask, nullptr, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
+                } else {
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                    cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
+                            model.layers[il].wo, model.layers[il].bo,
+                            Kcur, Vcur, Qcur, KQ_mask, KQ_pos, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
+                }
             }
 
             if (il == n_layer - 1) {
@@ -11594,28 +11762,10 @@ static std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & 
 // grammar - internal
 //
 
-struct llama_partial_utf8 {
-    uint32_t value;    // bit value so far (unshifted)
-    int      n_remain; // num bytes remaining; -1 indicates invalid sequence
-};
-
-struct llama_grammar {
-    const std::vector<std::vector<llama_grammar_element>>   rules;
-    std::vector<std::vector<const llama_grammar_element *>> stacks;
-
-    // buffer for partially generated UTF-8 sequence from accepted tokens
-    llama_partial_utf8                                      partial_utf8;
-};
-
-struct llama_grammar_candidate {
-    size_t               index;
-    const uint32_t     * code_points;
-    llama_partial_utf8   partial_utf8;
-};
 
 // Decodes a UTF-8 string which may end in an incomplete sequence. Adds a terminating 0 for use as
 // pointer. If an invalid sequence is encountered, returns `llama_partial_utf8.n_remain == -1`.
-static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
+std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
         const std::string & src,
         llama_partial_utf8   partial_start) {
     static const int      lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
@@ -11817,7 +11967,7 @@ static void llama_grammar_advance_stack(
 // be positioned at a character range (see `llama_grammar_advance_stack`), and
 // produces the N possible stacks if the given char is accepted at those
 // positions
-static std::vector<std::vector<const llama_grammar_element *>> llama_grammar_accept(
+std::vector<std::vector<const llama_grammar_element *>> llama_grammar_accept(
         const std::vector<std::vector<llama_grammar_element>>         & rules,
         const std::vector<std::vector<const llama_grammar_element *>> & stacks,
         const uint32_t                                                  chr) {
@@ -13043,7 +13193,6 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             // sprinkled in the model. Hence, simply dividing i_ffn_down by n_expert does not work
             // for getting the current layer as I initially thought, and we need to resort to parsing the
             // tensor name.
-            n_layer /= n_expert;
             if (sscanf(name, "blk.%d.", &i_layer) != 1) {
                 throw std::runtime_error(format("Failed to determine layer for tensor %s", name));
             }
@@ -13405,7 +13554,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         kv_overrides = v->data();
     }
     llama_model_loader ml(fname_inp, use_mmap, kv_overrides);
-    ml.init_mappings(false); // no prefetching?
+    ml.init_mappings(false); // no prefetching
 
     llama_model model;
     llm_load_arch(ml, model);
@@ -13457,20 +13606,15 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // TODO: avoid hardcoded tensor names - use the TN_* constants
         if (name.find("attn_v.weight") != std::string::npos || name.find("attn_qkv.weight") != std::string::npos) {
             ++qs.n_attention_wv;
-        } else if (name.find("ffn_down") != std::string::npos) {
-            ++qs.n_ffn_down;
-        } else if (name.find("ffn_gate") != std::string::npos) {
-            ++qs.n_ffn_gate;
-        } else if (name.find("ffn_up") != std::string::npos) {
-            ++qs.n_ffn_up;
         } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
             qs.has_output = true;
         }
     }
-    if (qs.n_attention_wv != qs.n_ffn_down || (uint32_t) qs.n_attention_wv != model.hparams.n_layer) {
-        LLAMA_LOG_WARN("%s ============ Strange model: n_attention_wv = %d, n_ffn_down = %d, hparams.n_layer = %d\n",
-                __func__, qs.n_attention_wv, qs.n_ffn_down, model.hparams.n_layer);
-    }
+
+    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
+
+    // sanity checks
+    GGML_ASSERT(qs.n_attention_wv == (int)model.hparams.n_layer && "n_attention_wv != n_layer is unexpected");
 
     size_t total_size_org = 0;
     size_t total_size_new = 0;
@@ -13500,6 +13644,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     // placeholder for the meta data
     ::zeros(fout, meta_size);
 
+    const auto tn = LLM_TN(model.arch);
+
     for (int i = 0; i < ml.n_tensors; ++i) {
         struct ggml_tensor * tensor = ml.get_tensor_meta(i);
 
@@ -13522,8 +13668,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // This used to be a regex, but <regex> has an extreme cost to compile times.
         bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
-        // quantize only 2D tensors
-        quantize &= (ggml_n_dims(tensor) == 2);
+        // quantize only 2D and 3D tensors (experts)
+        quantize &= (ggml_n_dims(tensor) >= 2);
         quantize &= params->quantize_output_tensor || name != "output.weight";
         quantize &= !params->only_copy;
 
@@ -13578,11 +13724,20 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 if (it == imatrix_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
-                    if (it->second.size() == (size_t)tensor->ne[0]) {
+                    if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                         imatrix = it->second.data();
                     } else {
                         LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
-                                int(it->second.size()), int(tensor->ne[0]), tensor->name);
+                                int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
+
+                        // this can happen when quantizing an old mixtral model with split tensors with a new incompatible imatrix
+                        // this is a significant error and it may be good idea to abort the process if this happens,
+                        // since many people will miss the error and not realize that most of the model is being quantized without an imatrix
+                        // tok_embd should be ignored in this case, since it always causes this warning
+                        if (name != tn(LLM_TENSOR_TOKEN_EMBD, "weight")) {
+                            throw std::runtime_error(format("imatrix size %d is different from tensor size %d for %s",
+                                    int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name));
+                        }
                     }
                 }
             }
@@ -13619,15 +13774,24 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             new_data = work.data();
 
             const int n_per_row = tensor->ne[0];
-            const int nrows = nelements / n_per_row;
+            const int nrows = tensor->ne[1];
 
             static const int min_chunk_size = 32 * 512;
             const int chunk_size = n_per_row >= min_chunk_size ? n_per_row : n_per_row * ((min_chunk_size + n_per_row - 1)/n_per_row);
 
-            const int nchunk = (nelements + chunk_size - 1)/chunk_size;
+            const int nelements_matrix = tensor->ne[0] * tensor->ne[1];
+            const int nchunk = (nelements_matrix + chunk_size - 1)/chunk_size;
             const int nthread_use = nthread > 1 ? std::max(1, std::min(nthread, nchunk)) : 1;
-            new_size = llama_tensor_quantize_internal(new_type, f32_data, new_data, chunk_size, nrows, n_per_row, imatrix, workers, nthread_use);
 
+            // quantize each expert separately since they have different importance matrices
+            new_size = 0;
+            for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
+                const float * f32_data_03 = f32_data + i03 * nelements_matrix;
+                void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
+                const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
+
+                new_size += llama_tensor_quantize_internal(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
+            }
             LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
         }
         total_size_org += ggml_nbytes(tensor);
@@ -15850,6 +16014,55 @@ static int32_t llama_chat_apply_template_internal(
             } else {
                 ss << message->content << "</s>";
             }
+        }
+    } else if (tmpl == "openchat" || tmpl.find("GPT4 Correct ") != std::string::npos) {
+        // openchat/openchat-3.5-0106,
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << message->content << "<|end_of_turn|>";
+            } else {
+                role[0] = toupper(role[0]);
+                ss << "GPT4 Correct " << role << ": " << message->content << "<|end_of_turn|>";
+            }
+        }
+        if (add_ass) {
+            ss << "GPT4 Correct Assistant:";
+        }
+    } else if (tmpl == "vicuna" || tmpl == "vicuna-orca" || (tmpl.find("USER: ") != std::string::npos && tmpl.find("ASSISTANT: ") != std::string::npos)) {
+        // eachadea/vicuna-13b-1.1 (and Orca variant)
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                // Orca-Vicuna variant uses a system prefix
+                if (tmpl == "vicuna-orca" || tmpl.find("SYSTEM: ") != std::string::npos) {
+                    ss << "SYSTEM: " << message->content << "\n";
+                } else {
+                    ss << message->content << "\n\n";
+                }
+            } else if (role == "user") {
+                ss << "USER: " << message->content << "\n";
+            } else if (role == "assistant") {
+                ss << "ASSISTANT: " << message->content << "</s>\n";
+            }
+        }
+        if (add_ass) {
+            ss << "ASSISTANT:";
+        }
+    } else if (tmpl == "deepseek" || (tmpl.find("### Instruction:") != std::string::npos && tmpl.find("<|EOT|>") != std::string::npos)) {
+        // deepseek-ai/deepseek-coder-33b-instruct
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << message->content;
+            } else if (role == "user") {
+                ss << "### Instruction:\n" << message->content << "\n";
+            } else if (role == "assistant") {
+                ss << "### Response:\n" << message->content << "\n<|EOT|>\n";
+            }
+        }
+        if (add_ass) {
+            ss << "### Response:\n";
         }
     } else {
         // template not supported
