@@ -3907,6 +3907,31 @@ static void llm_load_hparams(
 static std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, std::string raw_text, bool bos, bool special = false);
 static llama_token llama_byte_to_token(const llama_vocab & vocab, uint8_t ch);
 
+static bool llama_token_contains_smaller(const llama_vocab & vocab, const std::string & token) {
+    // Split token string representation in two, in all possible ways
+    //  and check if both halves can be matched to a valid token
+    for (unsigned i = 1; i < token.length();) {
+        const auto left  = token.substr(0, i);
+        const auto right = token.substr(i);
+
+        // check if we didnt partition in the middle of a utf sequence
+        auto utf = utf8_len(left.at(left.length() - 1));
+
+        if (utf == 1) {
+            if (vocab.token_to_id.find(left)  != vocab.token_to_id.end() &&
+                vocab.token_to_id.find(right) != vocab.token_to_id.end() ) {
+                return true;
+            }
+            i++;
+        } else {
+            // skip over the rest of multibyte utf sequence
+            i += utf - 1;
+        }
+    }
+
+    return false;
+}
+
 static void llm_load_vocab(
         llama_model_loader & ml,
         llama_model & model) {
@@ -4130,26 +4155,11 @@ static void llm_load_vocab(
             if (token.length() > 1) {
                 bool is_tokenizable = false;
 
-                // Split token string representation in two, in all possible ways
-                //  and check if both halves can be matched to a valid token
-                for (unsigned i = 1; i < token.length();) {
-                    const auto left  = token.substr(0, i);
-                    const auto right = token.substr(i);
-
-                    // check if we didnt partition in the middle of a utf sequence
-                    auto utf = utf8_len(left.at(left.length() - 1));
-
-                    if (utf == 1) {
-                        if (vocab.token_to_id.find(left)  != vocab.token_to_id.end() &&
-                            vocab.token_to_id.find(right) != vocab.token_to_id.end() ) {
-                            is_tokenizable = true;
-                            break;
-                        }
-                        i++;
-                    } else {
-                        // skip over the rest of multibyte utf sequence
-                        i += utf - 1;
-                    }
+                // RWKV tokenizer does not merge tokens progressively, so doesn't need to contain smaller tokens
+                if (vocab.type != LLAMA_VOCAB_TYPE_RWKV) {
+                    is_tokenizable = llama_token_contains_smaller(vocab, token);
+                } else {
+                    is_tokenizable = true;
                 }
 
                 if (!is_tokenizable) {
@@ -11250,7 +11260,7 @@ struct llm_tokenizer_wpm {
 
 // RWKV tokenizer
 
-static std::vector<uint8_t> unescape_rwkv_token(const std::string & escaped) {
+static std::vector<uint8_t> llama_unescape_rwkv_token(const std::string & escaped) {
     std::vector<uint8_t> output;
 
     // Parser state
@@ -11308,7 +11318,7 @@ struct llm_tokenizer_rwkv {
         // RWKV supports arbitrary byte tokens, but the vocab struct only supports string tokens.
         // For now, we decode the vocab here into the lookup we'll use for tokenization.
         for (const auto & token : vocab.id_to_token) {
-            auto data = unescape_rwkv_token(token.text);
+            auto data = llama_unescape_rwkv_token(token.text);
             tokens.push_back(data);
         }
     }
@@ -15701,7 +15711,7 @@ int32_t llama_token_to_piece(const struct llama_model * model, llama_token token
         }
         case LLAMA_VOCAB_TYPE_RWKV: {
             const llama_vocab::token_data & resolved = model->vocab.id_to_token[token];
-            std::vector<uint8_t> result = unescape_rwkv_token(resolved.text);
+            std::vector<uint8_t> result = llama_unescape_rwkv_token(resolved.text);
 
             // If we don't have enough space, return an error
             if (result.size() > (size_t)length) {
