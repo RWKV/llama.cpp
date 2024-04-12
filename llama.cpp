@@ -4103,8 +4103,8 @@ static void llm_load_vocab(
             vocab.type = LLAMA_VOCAB_TYPE_RWKV;
 
             // default special tokens
-            vocab.special_bos_id = 0;
-            vocab.special_eos_id = 0;
+            vocab.special_bos_id = -1;
+            vocab.special_eos_id = -1;
             vocab.special_unk_id = -1;
             vocab.special_sep_id = -1;
             vocab.special_pad_id = -1;
@@ -5450,6 +5450,10 @@ static bool llm_load_tensors(
                         layer.ffn_down = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
                         layer.ffn_up   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
                     }
+                } break;
+            case LLM_ARCH_RWKV5:
+                {
+                    model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
                 } break;
             default:
                 throw std::runtime_error("unknown architecture");
@@ -11534,6 +11538,11 @@ struct llm_tokenizer_rwkv {
         while (position < text.size()) {
             // Iterate through possible tokens backwards, starting with the largest
             for (int32_t i = (int32_t)tokens.size() - 1; i >= 0; i--) {
+                // Skip tokens that aren't normal type, we can't match on those
+                if (vocab.id_to_token[i].type != LLAMA_TOKEN_TYPE_NORMAL) {
+                    continue;
+                }
+
                 uint32_t token_size = tokens[i].size();
 
                 // If there's not enough left for this token
