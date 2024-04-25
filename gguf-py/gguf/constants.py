@@ -90,6 +90,8 @@ class Keys:
         HF_JSON          = "tokenizer.huggingface.json"
         RWKV             = "tokenizer.rwkv.world"
         CHAT_TEMPLATE    = "tokenizer.chat_template"
+        CHAT_TEMPLATE_N  = "tokenizer.chat_template.{name}"
+        CHAT_TEMPLATES   = "tokenizer.chat_templates"
         # FIM/Infill special tokens constants
         PREFIX_ID        = "tokenizer.ggml.prefix_token_id"
         SUFFIX_ID        = "tokenizer.ggml.suffix_token_id"
@@ -122,6 +124,7 @@ class MODEL_ARCH(IntEnum):
     QWEN2      = auto()
     QWEN2MOE   = auto()
     PHI2       = auto()
+    PHI3       = auto()
     PLAMO      = auto()
     CODESHELL  = auto()
     ORION      = auto()
@@ -133,6 +136,7 @@ class MODEL_ARCH(IntEnum):
     XVERSE     = auto()
     COMMAND_R  = auto()
     DBRX       = auto()
+    OLMO       = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -197,6 +201,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2:          "qwen2",
     MODEL_ARCH.QWEN2MOE:       "qwen2moe",
     MODEL_ARCH.PHI2:           "phi2",
+    MODEL_ARCH.PHI3:           "phi3",
     MODEL_ARCH.PLAMO:          "plamo",
     MODEL_ARCH.CODESHELL:      "codeshell",
     MODEL_ARCH.ORION:          "orion",
@@ -208,6 +213,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.XVERSE:         "xverse",
     MODEL_ARCH.COMMAND_R:      "command-r",
     MODEL_ARCH.DBRX:           "dbrx",
+    MODEL_ARCH.OLMO:           "olmo",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -546,6 +552,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.PHI3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.CODESHELL: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.POS_EMBD,
@@ -692,6 +712,17 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.OLMO: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     # TODO
 }
@@ -857,6 +888,7 @@ GGML_QUANT_SIZES = {
     GGMLQuantizationType.I32:     (1, 4),
     GGMLQuantizationType.I64:     (1, 8),
     GGMLQuantizationType.F64:     (1, 8),
+    GGMLQuantizationType.IQ1_M:   (256, QK_K // 8 + QK_K // 16  + QK_K // 32),
 }
 
 
