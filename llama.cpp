@@ -6888,6 +6888,40 @@ static struct ggml_tensor * llm_build_time_mix(
     const struct llama_layer * layer,
     struct ggml_tensor * current,
     int layer_i) {
+    // TODO: Infer from config, hardcoded for rwkv5-world-1.5b
+    int head_count = 64;
+    int head_size = 64;
+
+    // i1 = (2+S)*i+1
+    int i1 = (2 + head_size) * layer_i + 1;
+
+    // xk = x * time_mix_k + state[i1] * (1 - time_mix_k)
+
+    /*
+    xk = x * time_mix_k + state[i1] * (1 - time_mix_k)
+    xv = x * time_mix_v + state[i1] * (1 - time_mix_v)
+    xr = x * time_mix_r + state[i1] * (1 - time_mix_r)
+    xg = x * time_mix_g + state[i1] * (1 - time_mix_g)
+    state[i1] = x
+
+    r = (rw @ xr).view(H, 1, S)
+    k = (kw @ xk).view(H, S, 1)
+    v = (vw @ xv).view(H, 1, S)
+    g = F.silu(gw @ xg)
+
+    s = state[(2+S)*i+2:(2+S)*(i+1), :].reshape(H, S, S)
+
+    x = torch.zeros(H, S)
+    a = k @ v
+    x = r @ (time_first * a + s)
+    s = a + time_decay * s
+
+    state[(2+S)*i+2:(2+S)*(i+1), :] = s.reshape(S, -1)
+    x = x.flatten()
+
+    x = F.group_norm(x.unsqueeze(0), num_groups=H, weight=ln_w, bias=ln_b, eps = 64e-5).squeeze(0) * g # same as gn(x/8, eps=1e-5)
+    return ow @ x
+    */
 
     return current;
 }
