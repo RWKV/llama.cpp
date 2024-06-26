@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)  # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
@@ -39,8 +39,12 @@ endif()
 
 if (APPLE)
     set(LLAMA_METAL_DEFAULT ON)
+    set(LLAMA_BLAS_DEFAULT ON)
+    set(LLAMA_BLAS_VENDOR_DEFAULT "Apple")
 else()
     set(LLAMA_METAL_DEFAULT OFF)
+    set(LLAMA_BLAS_DEFAULT OFF)
+    set(LLAMA_BLAS_VENDOR_DEFAULT "Generic")
 endif()
 
 set(LLAMA_LLAMAFILE_DEFAULT ON)
@@ -72,11 +76,13 @@ else()
     set(INS_ENB ON)
 endif()
 
+option(LLAMA_SVE                             "llama: enable SVE"                                OFF)
 option(LLAMA_AVX                             "llama: enable AVX"                                ${INS_ENB})
 option(LLAMA_AVX2                            "llama: enable AVX2"                               ${INS_ENB})
 option(LLAMA_AVX512                          "llama: enable AVX512"                             OFF)
 option(LLAMA_AVX512_VBMI                     "llama: enable AVX512-VBMI"                        OFF)
 option(LLAMA_AVX512_VNNI                     "llama: enable AVX512-VNNI"                        OFF)
+option(LLAMA_AVX512_BF16                     "llama: enable AVX512-BF16"                        OFF)
 option(LLAMA_FMA                             "llama: enable FMA"                                ${INS_ENB})
 # in MSVC F16C is implied with AVX2/AVX512
 if (NOT MSVC)
@@ -89,13 +95,15 @@ endif()
 
 # 3rd party libs
 option(LLAMA_ACCELERATE                      "llama: enable Accelerate framework"               ON)
-option(LLAMA_BLAS                            "llama: use BLAS"                                  OFF)
+option(LLAMA_BLAS                            "llama: use BLAS"                                  ${LLAMA_BLAS_DEFAULT})
+set(LLAMA_BLAS_VENDOR ${LLAMA_BLAS_VENDOR_DEFAULT} CACHE STRING
+                                             "llama: BLAS library vendor")
 option(LLAMA_LLAMAFILE                       "llama: use llamafile SGEMM"                       ${LLAMA_LLAMAFILE_DEFAULT})
-set(LLAMA_BLAS_VENDOR "Generic" CACHE STRING "llama: BLAS library vendor")
 option(LLAMA_CUDA                            "llama: use CUDA"                                  OFF)
 option(LLAMA_CUBLAS                          "llama: use CUDA (deprecated, use LLAMA_CUDA)"     OFF)
 option(LLAMA_CUDA_FORCE_DMMV                 "llama: use dmmv instead of mmvq CUDA kernels"     OFF)
-option(LLAMA_CUDA_FORCE_MMQ                  "llama: use mmq kernels instead of cuBLAS"         OFF)
+option(LLAMA_CUDA_FORCE_MMQ                  "llama: always use mmq kernels instead of cuBLAS"  OFF)
+option(LLAMA_CUDA_FORCE_CUBLAS               "llama: always use cuBLAS instead of mmq kernels"  OFF)
 set(LLAMA_CUDA_DMMV_X      "32" CACHE STRING "llama: x stride for dmmv CUDA kernels")
 set(LLAMA_CUDA_MMV_Y        "1" CACHE STRING "llama: y block size for mmv CUDA kernels")
 option(LLAMA_CUDA_F16                        "llama: use 16 bit floats for some calculations"   OFF)
@@ -104,14 +112,15 @@ set(LLAMA_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
                                              "llama: max. batch size for using peer access")
 option(LLAMA_CUDA_NO_PEER_COPY               "llama: do not use peer to peer copies"            OFF)
 option(LLAMA_CUDA_NO_VMM                     "llama: do not try to use CUDA VMM"                OFF)
+option(LLAMA_CUDA_FA_ALL_QUANTS              "llama: compile all quants for FlashAttention"     OFF)
 
 option(LLAMA_CURL                            "llama: use libcurl to download model from an URL" OFF)
 option(LLAMA_HIPBLAS                         "llama: use hipBLAS"                               OFF)
 option(LLAMA_HIP_UMA                         "llama: use HIP unified memory architecture"       OFF)
-option(LLAMA_CLBLAST                         "llama: use CLBlast"                               OFF)
 option(LLAMA_VULKAN                          "llama: use Vulkan"                                OFF)
 option(LLAMA_VULKAN_CHECK_RESULTS            "llama: run Vulkan op checks"                      OFF)
 option(LLAMA_VULKAN_DEBUG                    "llama: enable Vulkan debug output"                OFF)
+option(LLAMA_VULKAN_MEMORY_DEBUG             "llama: enable Vulkan memory debug output"         OFF)
 option(LLAMA_VULKAN_VALIDATE                 "llama: enable Vulkan validation"                  OFF)
 option(LLAMA_VULKAN_RUN_TESTS                "llama: run Vulkan tests"                          OFF)
 option(LLAMA_METAL                           "llama: use Metal"                                 ${LLAMA_METAL_DEFAULT})
@@ -122,9 +131,8 @@ set(LLAMA_METAL_MACOSX_VERSION_MIN "" CACHE STRING
                                              "llama: metal minimum macOS version")
 set(LLAMA_METAL_STD "" CACHE STRING          "llama: metal standard version (-std flag)")
 option(LLAMA_KOMPUTE                         "llama: use Kompute"                               OFF)
-option(LLAMA_MPI                             "llama: use MPI"                                   OFF)
 option(LLAMA_RPC                             "llama: use RPC"                                   OFF)
-option(LLAMA_QKK_64                          "llama: use super-block size of 64 for k-quants"   OFF)
+option(LLAMA_OPENMP                          "llama: use OpenMP"                                ON)
 option(LLAMA_SYCL                            "llama: use SYCL"                                  OFF)
 option(LLAMA_SYCL_F16                        "llama: use 16 bit floats for sycl calculations"   OFF)
 set(LLAMA_SYCL_TARGET   "INTEL" CACHE STRING "llama: sycl target device")
@@ -134,9 +142,8 @@ set(LLAMA_SCHED_MAX_COPIES  "4" CACHE STRING "llama: max input copies for pipeli
 option(LLAMA_BUILD_TESTS                     "llama: build tests"    ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES                  "llama: build examples" ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER                    "llama: build server example"                      ON)
-
-# add perf arguments
-option(LLAMA_PERF                            "llama: enable perf"                               OFF)
+option(LLAMA_LASX                            "llama: enable lasx"                               ON)
+option(LLAMA_LSX                             "llama: enable lsx"                                ON)
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
@@ -293,13 +300,24 @@ if (LLAMA_METAL)
         )
 endif()
 
+if (LLAMA_OPENMP)
+    find_package(OpenMP)
+    if (OpenMP_FOUND)
+        message(STATUS "OpenMP found")
+        add_compile_definitions(GGML_USE_OPENMP)
+        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+    else()
+        message(WARNING "OpenMP not found")
+    endif()
+endif()
+
 if (LLAMA_BLAS)
     if (LLAMA_STATIC)
         set(BLA_STATIC ON)
     endif()
-    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
-        set(BLA_SIZEOF_INTEGER 8)
-    endif()
+    #if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+    #    set(BLA_SIZEOF_INTEGER 8)
+    #endif()
 
     set(BLA_VENDOR ${LLAMA_BLAS_VENDOR})
     find_package(BLAS)
@@ -307,7 +325,7 @@ if (LLAMA_BLAS)
     if (BLAS_FOUND)
         message(STATUS "BLAS found, Libraries: ${BLAS_LIBRARIES}")
 
-        if ("${BLAS_INCLUDE_DIRS}" STREQUAL "")
+        if (("${BLAS_INCLUDE_DIRS}" STREQUAL "") AND NOT (${LLAMA_BLAS_VENDOR} MATCHES "Apple"))
             # BLAS_INCLUDE_DIRS is missing in FindBLAS.cmake.
             # see https://gitlab.kitware.com/cmake/cmake/-/issues/20268
             find_package(PkgConfig REQUIRED)
@@ -360,11 +378,14 @@ if (LLAMA_BLAS)
 
         add_compile_options(${BLAS_LINKER_FLAGS})
 
-        add_compile_definitions(GGML_USE_OPENBLAS)
+        add_compile_definitions(GGML_USE_BLAS)
 
         if (${BLAS_INCLUDE_DIRS} MATCHES "mkl" AND (${LLAMA_BLAS_VENDOR} MATCHES "Generic" OR ${LLAMA_BLAS_VENDOR} MATCHES "Intel"))
             add_compile_definitions(GGML_BLAS_USE_MKL)
         endif()
+
+        set(GGML_HEADERS_BLAS ggml-blas.h)
+        set(GGML_SOURCES_BLAS ggml-blas.cpp)
 
         set(LLAMA_EXTRA_LIBS     ${LLAMA_EXTRA_LIBS}     ${BLAS_LIBRARIES})
         set(LLAMA_EXTRA_INCLUDES ${LLAMA_EXTRA_INCLUDES} ${BLAS_INCLUDE_DIRS})
@@ -382,21 +403,32 @@ if (LLAMA_LLAMAFILE)
     set(GGML_SOURCES_LLAMAFILE sgemm.cpp)
 endif()
 
-if (LLAMA_QKK_64)
-    add_compile_definitions(GGML_QKK_64)
-endif()
-
 if (LLAMA_CUBLAS)
     message(WARNING "LLAMA_CUBLAS is deprecated and will be removed in the future.\nUse LLAMA_CUDA instead")
     set(LLAMA_CUDA ON)
 endif()
 
 if (LLAMA_CUDA)
-    cmake_minimum_required(VERSION 3.17)
+    cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 
     find_package(CUDAToolkit)
     if (CUDAToolkit_FOUND)
         message(STATUS "CUDA found")
+
+        if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            # 52 == lowest CUDA 12 standard
+            # 60 == FP16 CUDA intrinsics
+            # 61 == integer CUDA intrinsics
+            # 70 == FP16 tensor cores
+            # 75 == int8 tensor cores
+            if (LLAMA_CUDA_F16 OR LLAMA_CUDA_DMMV_F16)
+                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75")
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "52;61;70;75")
+                #set(CMAKE_CUDA_ARCHITECTURES "OFF") # use this to compile much faster, but only F16 models work
+            endif()
+        endif()
+        message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
         enable_language(CUDA)
 
@@ -404,6 +436,10 @@ if (LLAMA_CUDA)
 
         file(GLOB GGML_SOURCES_CUDA "ggml-cuda/*.cu")
         list(APPEND GGML_SOURCES_CUDA "ggml-cuda.cu")
+        file(GLOB SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        file(GLOB SRCS "ggml-cuda/template-instances/mmq*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
         add_compile_definitions(GGML_USE_CUDA)
         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
@@ -412,6 +448,9 @@ if (LLAMA_CUDA)
         endif()
         if (LLAMA_CUDA_FORCE_MMQ)
             add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+        endif()
+        if (LLAMA_CUDA_FORCE_CUBLAS)
+            add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
         endif()
         if (LLAMA_CUDA_NO_VMM)
             add_compile_definitions(GGML_CUDA_NO_VMM)
@@ -428,6 +467,18 @@ if (LLAMA_CUDA)
         add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${LLAMA_CUDA_PEER_MAX_BATCH_SIZE})
         if (LLAMA_CUDA_NO_PEER_COPY)
             add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
+        endif()
+        if (LLAMA_CUDA_FA_ALL_QUANTS)
+            file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
+        else()
+            file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
+            file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
+            list(APPEND GGML_SOURCES_CUDA ${SRCS})
         endif()
 
         if (LLAMA_STATIC)
@@ -446,52 +497,8 @@ if (LLAMA_CUDA)
         else()
             set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} CUDA::cuda_driver) # required by cuDeviceGetAttribute(), cuMemGetAllocationGranularity(...), ...
         endif()
-
-    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        # 52 == lowest CUDA 12 standard
-        # 60 == f16 CUDA intrinsics
-        # 61 == integer CUDA intrinsics
-        # 70 == compute capability at which unrolling a loop in mul_mat_q kernels is faster
-        if (LLAMA_CUDA_F16 OR LLAMA_CUDA_DMMV_F16)
-            set(CMAKE_CUDA_ARCHITECTURES "60;61;70") # needed for f16 CUDA intrinsics
-        else()
-            set(CMAKE_CUDA_ARCHITECTURES "52;61;70") # lowest CUDA 12 standard + lowest for integer intrinsics
-            #set(CMAKE_CUDA_ARCHITECTURES "") # use this to compile much faster, but only F16 models work
-        endif()
-    endif()
-    message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
-
     else()
         message(WARNING "CUDA not found")
-    endif()
-endif()
-
-if (LLAMA_MPI)
-    cmake_minimum_required(VERSION 3.10)
-    find_package(MPI)
-    if (MPI_C_FOUND)
-        message(STATUS "MPI found")
-
-        set(GGML_HEADERS_MPI ggml-mpi.h)
-        set(GGML_SOURCES_MPI ggml-mpi.c)
-
-        add_compile_definitions(GGML_USE_MPI)
-        add_compile_definitions(${MPI_C_COMPILE_DEFINITIONS})
-
-        if (NOT MSVC)
-            add_compile_options(-Wno-cast-qual)
-        endif()
-
-        set(LLAMA_EXTRA_LIBS     ${LLAMA_EXTRA_LIBS}     ${MPI_C_LIBRARIES})
-        set(LLAMA_EXTRA_INCLUDES ${LLAMA_EXTRA_INCLUDES} ${MPI_C_INCLUDE_DIRS})
-
-        # Even if you're only using the C header, C++ programs may bring in MPI
-        # C++ functions, so more linkage is needed
-        if (MPI_CXX_FOUND)
-            set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS}     ${MPI_CXX_LIBRARIES})
-        endif()
-    else()
-        message(WARNING "MPI not found")
     endif()
 endif()
 
@@ -506,22 +513,6 @@ if (LLAMA_RPC)
     set(GGML_SOURCES_RPC ggml-rpc.cpp)
 endif()
 
-if (LLAMA_CLBLAST)
-    find_package(CLBlast)
-    if (CLBlast_FOUND)
-        message(STATUS "CLBlast found")
-
-        set(GGML_HEADERS_OPENCL ggml-opencl.h)
-        set(GGML_SOURCES_OPENCL ggml-opencl.cpp)
-
-        add_compile_definitions(GGML_USE_CLBLAST)
-
-        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} clblast)
-    else()
-        message(WARNING "CLBlast not found")
-    endif()
-endif()
-
 if (LLAMA_VULKAN)
     find_package(Vulkan)
     if (Vulkan_FOUND)
@@ -532,12 +523,22 @@ if (LLAMA_VULKAN)
 
         add_compile_definitions(GGML_USE_VULKAN)
 
+        # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
+        # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
+        if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
+        endif()
+
         if (LLAMA_VULKAN_CHECK_RESULTS)
             add_compile_definitions(GGML_VULKAN_CHECK_RESULTS)
         endif()
 
         if (LLAMA_VULKAN_DEBUG)
             add_compile_definitions(GGML_VULKAN_DEBUG)
+        endif()
+
+        if (LLAMA_VULKAN_MEMORY_DEBUG)
+            add_compile_definitions(GGML_VULKAN_MEMORY_DEBUG)
         endif()
 
         if (LLAMA_VULKAN_VALIDATE)
@@ -555,16 +556,42 @@ if (LLAMA_VULKAN)
 endif()
 
 if (LLAMA_HIPBLAS)
-    list(APPEND CMAKE_PREFIX_PATH /opt/rocm)
+    if (NOT EXISTS $ENV{ROCM_PATH})
+        if (NOT EXISTS /opt/rocm)
+            set(ROCM_PATH /usr)
+        else()
+            set(ROCM_PATH /opt/rocm)
+        endif()
+    else()
+        set(ROCM_PATH $ENV{ROCM_PATH})
+    endif()
+    list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
+    list(APPEND CMAKE_PREFIX_PATH "${ROCM_PATH}/lib64/cmake")
 
-    if (NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang")
-        message(WARNING "Only LLVM is supported for HIP, hint: CC=/opt/rocm/llvm/bin/clang")
+    # CMake on Windows doesn't support the HIP language yet
+    if(WIN32)
+        set(CXX_IS_HIPCC TRUE)
+    else()
+        string(REGEX MATCH "hipcc(\.bat)?$" CXX_IS_HIPCC "${CMAKE_CXX_COMPILER}")
     endif()
 
-    if (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
-        message(WARNING "Only LLVM is supported for HIP, hint: CXX=/opt/rocm/llvm/bin/clang++")
-    endif()
+    if(CXX_IS_HIPCC)
+        if(LINUX)
+            if (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
+                message(WARNING "Only LLVM is supported for HIP, hint: CXX=/opt/rocm/llvm/bin/clang++")
+            endif()
 
+            message(WARNING "Setting hipcc as the C++ compiler is legacy behavior."
+                    " Prefer setting the HIP compiler directly. See README for details.")
+        endif()
+    else()
+        # Forward AMDGPU_TARGETS to CMAKE_HIP_ARCHITECTURES.
+        if(AMDGPU_TARGETS AND NOT CMAKE_HIP_ARCHITECTURES)
+            set(CMAKE_HIP_ARCHITECTURES ${AMDGPU_TARGETS})
+        endif()
+        cmake_minimum_required(VERSION 3.21)
+        enable_language(HIP)
+    endif()
     find_package(hip     REQUIRED)
     find_package(hipblas REQUIRED)
     find_package(rocblas REQUIRED)
@@ -575,6 +602,10 @@ if (LLAMA_HIPBLAS)
 
     file(GLOB GGML_SOURCES_ROCM "ggml-cuda/*.cu")
     list(APPEND GGML_SOURCES_ROCM "ggml-cuda.cu")
+    file(GLOB SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
+    list(APPEND GGML_SOURCES_ROCM ${SRCS})
+    file(GLOB SRCS "ggml-cuda/template-instances/mmq*.cu")
+    list(APPEND GGML_SOURCES_ROCM ${SRCS})
 
     add_compile_definitions(GGML_USE_HIPBLAS GGML_USE_CUDA)
 
@@ -594,17 +625,35 @@ if (LLAMA_HIPBLAS)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
 
+    if (LLAMA_CUDA_FA_ALL_QUANTS)
+        file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+        add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
+    else()
+        file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+        file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+        file(GLOB SRCS "ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+    endif()
+
     add_compile_definitions(GGML_CUDA_DMMV_X=${LLAMA_CUDA_DMMV_X})
     add_compile_definitions(GGML_CUDA_MMV_Y=${LLAMA_CUDA_MMV_Y})
     add_compile_definitions(K_QUANTS_PER_ITERATION=${LLAMA_CUDA_KQUANTS_ITER})
 
-    set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+    if (CXX_IS_HIPCC)
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} hip::device)
+    else()
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
+    endif()
 
     if (LLAMA_STATIC)
         message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
     endif()
 
-    set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} hip::device PUBLIC hip::host roc::rocblas roc::hipblas)
+    set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} PUBLIC hip::host roc::rocblas roc::hipblas)
 endif()
 
 if (LLAMA_SYCL)
@@ -618,6 +667,7 @@ if (LLAMA_SYCL)
     #todo: AOT
 
     find_package(IntelSYCL REQUIRED)
+    find_package(MKL REQUIRED)
 
     message(STATUS "SYCL found")
 
@@ -627,22 +677,27 @@ if (LLAMA_SYCL)
         add_compile_definitions(GGML_SYCL_F16)
     endif()
 
+    if (LLAMA_CUDA_FORCE_MMQ)
+        add_compile_definitions(GGML_SYCL_FORCE_MMQ)
+    endif()
+
     add_compile_options(-I./) #include DPCT
-    add_compile_options(-I/${SYCL_INCLUDE_DIR})
 
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -L${MKLROOT}/lib")
     if (LLAMA_SYCL_TARGET STREQUAL "NVIDIA")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=nvptx64-nvidia-cuda")
     endif()
 
     set(GGML_HEADERS_SYCL ggml-sycl.h)
-    set(GGML_SOURCES_SYCL ggml-sycl.cpp)
+    file(GLOB GGML_SOURCES_SYCL "ggml-sycl/*.cpp")
+    list(APPEND GGML_SOURCES_SYCL "ggml-sycl.cpp")
 
     if (WIN32)
-        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} -fsycl sycl7 OpenCL mkl_sycl_blas_dll.lib mkl_intel_ilp64_dll.lib mkl_sequential_dll.lib mkl_core_dll.lib)
+        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)
     else()
+        add_compile_options(-I/${SYCL_INCLUDE_DIR})
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -L${MKLROOT}/lib")
         if (LLAMA_SYCL_TARGET STREQUAL "INTEL")
             set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} -fsycl OpenCL mkl_core pthread m dl mkl_sycl_blas mkl_intel_ilp64 mkl_tbb_thread)
         elseif (LLAMA_SYCL_TARGET STREQUAL "NVIDIA")
@@ -742,6 +797,7 @@ if (LLAMA_KOMPUTE)
             kompute-shaders/op_mul_mat_q4_0.comp
             kompute-shaders/op_mul_mat_q4_1.comp
             kompute-shaders/op_mul_mat_q6_k.comp
+            kompute-shaders/op_getrows_f32.comp
             kompute-shaders/op_getrows_f16.comp
             kompute-shaders/op_getrows_q4_0.comp
             kompute-shaders/op_getrows_q4_1.comp
@@ -774,6 +830,7 @@ if (LLAMA_KOMPUTE)
             shaderop_mul_mat_q4_0.h
             shaderop_mul_mat_q4_1.h
             shaderop_mul_mat_q6_k.h
+            shaderop_getrows_f32.h
             shaderop_getrows_f16.h
             shaderop_getrows_q4_0.h
             shaderop_getrows_q4_1.h
@@ -813,10 +870,6 @@ if (LLAMA_CPU_HBM)
     add_compile_definitions(GGML_USE_CPU_HBM)
 
     target_link_libraries(ggml PUBLIC memkind)
-endif()
-
-if (LLAMA_PERF)
-    add_compile_definitions(GGML_PERF)
 endif()
 
 function(get_flags CCID CCVER)
@@ -1040,6 +1093,9 @@ if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_GENERATOR_PLATFORM_LWR STR
             # Raspberry Pi 3, 4, Zero 2 (32-bit)
             list(APPEND ARCH_FLAGS -mno-unaligned-access)
         endif()
+        if (LLAMA_SVE)
+            list(APPEND ARCH_FLAGS -march=armv8.6-a+sve)
+        endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
@@ -1063,6 +1119,10 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
             if (LLAMA_AVX512_VNNI)
                 add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVX512VNNI__>)
                 add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512VNNI__>)
+            endif()
+            if (LLAMA_AVX512_BF16)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVX512BF16__>)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512BF16__>)
             endif()
         elseif (LLAMA_AVX2)
             list(APPEND ARCH_FLAGS /arch:AVX2)
@@ -1095,6 +1155,9 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
         if (LLAMA_AVX512_VNNI)
             list(APPEND ARCH_FLAGS -mavx512vnni)
         endif()
+        if (LLAMA_AVX512_BF16)
+            list(APPEND ARCH_FLAGS -mavx512bf16)
+        endif()
     endif()
 elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc64")
     message(STATUS "PowerPC detected")
@@ -1104,6 +1167,17 @@ elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc64")
         list(APPEND ARCH_FLAGS -mcpu=native -mtune=native)
         #TODO: Add  targets for Power8/Power9 (Altivec/VSX) and Power10(MMA) and query for big endian systems (ppc64/le/be)
     endif()
+elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
+    message(STATUS "loongarch64 detected")
+
+    list(APPEND ARCH_FLAGS -march=loongarch64)
+    if (LLAMA_LASX)
+        list(APPEND ARCH_FLAGS -mlasx)
+    endif()
+    if (LLAMA_LSX)
+        list(APPEND ARCH_FLAGS -mlsx)
+    endif()
+
 else()
     message(STATUS "Unknown architecture")
 endif()
@@ -1190,15 +1264,14 @@ add_library(ggml OBJECT
             ggml-quants.c
             ggml-quants.h
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
-            ${GGML_SOURCES_OPENCL}    ${GGML_HEADERS_OPENCL}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
-            ${GGML_SOURCES_MPI}       ${GGML_HEADERS_MPI}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
             ${GGML_SOURCES_EXTRA}     ${GGML_HEADERS_EXTRA}
             ${GGML_SOURCES_SYCL}      ${GGML_HEADERS_SYCL}
             ${GGML_SOURCES_KOMPUTE}   ${GGML_HEADERS_KOMPUTE}
             ${GGML_SOURCES_VULKAN}    ${GGML_HEADERS_VULKAN}
             ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
+            ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
             ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
             )
 
@@ -1279,8 +1352,9 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/LlamaConfig.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Llama)
 
 set(GGML_PUBLIC_HEADERS "ggml.h" "ggml-alloc.h" "ggml-backend.h"
-        "${GGML_HEADERS_CUDA}"  "${GGML_HEADERS_OPENCL}"
-        "${GGML_HEADERS_METAL}" "${GGML_HEADERS_MPI}" "${GGML_HEADERS_EXTRA}")
+        "${GGML_HEADERS_CUDA}"
+        "${GGML_HEADERS_METAL}"
+        "${GGML_HEADERS_EXTRA}")
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 install(TARGETS ggml PUBLIC_HEADER)
@@ -1289,7 +1363,7 @@ set_target_properties(llama PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
 install(
-    FILES convert.py
+    FILES convert-hf-to-gguf.py
     PERMISSIONS
         OWNER_READ
         OWNER_WRITE
@@ -1315,6 +1389,13 @@ if (LLAMA_METAL)
         )
     endif()
 endif()
+
+configure_file(cmake/llama.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        DESTINATION lib/pkgconfig)
 
 #
 # programs, examples and tests
