@@ -5092,7 +5092,7 @@ static void llm_load_vocab(
             vocab.special_unk_id = -1;
             vocab.special_sep_id = -1;
             vocab.special_pad_id = -1;
-            vocab.add_space_prefix = false;
+            vocab.tokenizer_add_space_prefix = false;
         } else {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
@@ -14673,7 +14673,7 @@ struct llm_tokenizer_rwkv {
             // Iterate through possible tokens backwards, starting with the largest
             for (int32_t i = (int32_t)tokens.size() - 1; i >= 0; i--) {
                 // Skip tokens that aren't normal type, we can't match on those
-                if (vocab.id_to_token[i].type != LLAMA_TOKEN_TYPE_NORMAL) {
+                if (vocab.id_to_token[i].attr != LLAMA_TOKEN_ATTR_NORMAL) {
                     continue;
                 }
 
